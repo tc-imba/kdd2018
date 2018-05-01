@@ -1,67 +1,113 @@
 import json
 import csv
-import pandas
-import numpy
-from scipy import stats
-import matplotlib.pyplot as plt
-import statsmodels.api as sm
-from statsmodels.graphics.api import qqplot
 import datetime
+import model
+import getopt
+import sys
 
-beijing_stations = json.load(open('beijing.json'))
-london_stations = json.load(open('london.json'))
+try:
+    options, args = getopt.getopt(sys.argv[1:], "c:s:", ["city=", "station="])
+except getopt.GetoptError:
+    sys.stderr.write('error: getopt')
+    sys.exit()
 
-beijing_data = {}
-for station in beijing_stations:
-    beijing_data[station] = []
+city = None
+station = None
+for name, value in options:
+    if name in ("-c", "--city"):
+        city = value
+    elif name in ("-s", "--station"):
+        station = value
 
-reader = csv.reader(open('beijing_recent_aq.csv'))
+if city == 'beijing':
+    city_alias = 'bj'
+    predict_arr = [1, 2, 5]
+elif city == 'london':
+    city_alias = 'ld'
+    predict_arr = [1, 2]
+else:
+    sys.stderr.write('error: city %s is not defined' % city)
+    sys.exit()
+
+stations = json.load(open('%s.json' % city))
+if station:
+    if station in stations:
+        stations = [station]
+    else:
+        sys.stderr.write('error: station %s is not defined' % station)
+        sys.exit()
+
+city_data = {}
+for station in stations:
+    city_data[station] = []
+
+reader = csv.reader(open('%s_recent_aq.csv' % city))
 for row in reader:
-    if beijing_data.__contains__(row[1]):
-        arr = [x and float(x) or 0 for x in row[3:6]]
-        beijing_data[row[1]].append([row[2]] + arr)
+    if city_data.__contains__(row[1]):
+        arr = [x and float(x) or 0 for x in row[3:]]
+        city_data[row[1]].append([row[2]] + arr)
 
-data = list(zip(*beijing_data['aotizhongxin_aq']))
+# Load calculated data
+submission_data = {}
+for station in json.load(open('beijing.json')):
+    submission_data[station] = []
+for station in json.load(open('london.json')):
+    submission_data[station] = []
+for station in submission_data:
+    for i in range(48):
+        submission_data[station].append([0, 0, 0])
+try:
+    f = open('submission.csv')
+    reader = csv.reader(f)
+    for row in reader:
+        if len(row) > 0:
+            pos = row[0].find('#')
+            station = row[0][0:pos]
+            if submission_data.__contains__(station):
+                index = int(row[0][pos + 1:])
+                # print(station, index)
+                submission_data[station][index] = row[1:]
+    f.close()
+except FileNotFoundError:
+    pass
+
 time_format = '%Y-%m-%d %H:%M:%S'
-end_datetime = datetime.datetime.strptime(data[0][-1], time_format)
-predict_start = end_datetime #+ datetime.timedelta(hours=1)
-predict_end = datetime.datetime.combine(end_datetime.date(), datetime.time.min) \
-              + datetime.timedelta(hours=47)
+end_datetime = datetime.datetime.strptime(city_data[stations[0]][-1][0], time_format)
+predict_start = end_datetime  # + datetime.timedelta(hours=1)
+submission_start = datetime.datetime.combine(end_datetime.date(), datetime.time.min) \
+                   + datetime.timedelta(hours=24)
+predict_end = submission_start + datetime.timedelta(hours=47)
 
-# print(list(data[1]))
-d = pandas.Series(list(data[1]))
-d.index = pandas.Index(sm.tsa.datetools.dates_from_str(data[0]))
-d = d.diff(1)
-d = d.fillna(0)
-d = d.asfreq('H', method='backfill')
+station_index = 0
+for station in stations:
+    station_index += 1
+    print('Processing %s - %s (%d/%d)' % (city, station, station_index, len(stations)))
+    data = list(zip(*city_data[station]))
+    for i in range(len(predict_arr)):
+        # if all data is zero, the model gg
+        not_zero = 0
+        for j in data[predict_arr[i]]:
+            if j > 0:
+                not_zero += 1
+        if not_zero < len(data[predict_arr[i]]) / 3:
+            for index in range(48):
+                submission_data[station][index][i] = 0
+            continue
 
-print(d)
+        predict = model.analyze(data[predict_arr[i]], data[0], predict_start, predict_end)
+        index = 0
+        for j in range(len(predict.index)):
+            if predict.index[j] >= submission_start:
+                # print(predict.index[j], predict[j])
+                submission_data[station][index][i] = max(predict[j], 0)
+                index += 1
 
-# fig = plt.figure(figsize=(12, 8))
-# d.plot()
-# fig.show()
-
-# fig = plt.figure(figsize=(12, 8))
-# diff1 = d.diff(1)
-# diff1.plot()
-# fig.show()
-
-# print(diff1)
-arma = sm.tsa.ARMA(d, (24, 0)).fit()
-predict = arma.predict(predict_start, predict_end, dynamic=True)
-fig, ax = plt.subplots(figsize=(12, 8))
-ax = d.plot(ax=ax)
-predict.plot(ax=ax)
-fig.show()
-print(predict)
-
-writer = csv.writer(open('submission.csv', 'w'))
+f = open('submission.csv', 'w', newline='')
+writer = csv.writer(f)
 writer.writerow(['test_id', 'PM2.5', 'PM10', 'O3'])
 
-for station in beijing_stations:
-    for i in range(48):
-        writer.writerow([station + '#' + str(i), 0, 0, 0])
+for station in submission_data:
+    for i in range(len(submission_data[station])):
+        writer.writerow([station + '#' + str(i)] + submission_data[station][i])
 
-for station in london_stations:
-    for i in range(48):
-        writer.writerow([station + '#' + str(i), 0, 0, 0])
+f.close()
