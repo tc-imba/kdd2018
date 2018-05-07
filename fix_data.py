@@ -23,35 +23,45 @@ else:
     sys.stderr.write('error: city %s is not defined' % city)
     sys.exit()
 
+print('Fixing air quality of %s' % city)
+
 reader = csv.reader(open('%s_recent_aq.csv' % city))
 stations = json.load(open('%s_all.json' % city))
 time_format = '%Y-%m-%d %H:%M:%S'
 
 index = 0
 col_names = None
-data = []
-time = None
+city_data = {}
+for station in stations:
+    city_data[station] = {}
 
 for row in reader:
     if not col_names:
         col_names = row
     else:
-        if index == 0:
-            time = datetime.datetime.strptime(row[2], time_format)
-        if row[1] != stations[index]:
-            print('Fix station name %s -> %s in' % (row[1], stations[index]), row)
-            row[1] = stations[index]
-        time_str = time.strftime(time_format)
-        if row[2] != time_str:
-            print('Fix timestamp %s -> %s in' % (row[2], time_str), row)
-            row[2] = time_str
-        data.append(row)
-        index = (index + 1) % len(stations)
+        station = row[1]
+        time = row[2]
+        if city_data.__contains__(station):
+            arr = [x and float(x) or 0 for x in row[3:]]
+            city_data[station][time] = row[0:3] + arr
 
-
-f = open('%s_recent_aq.csv' % city, 'w', newline='')
+# print(city_data)
+f = open('%s_recent_aq_fixed.csv' % city, 'w', newline='')
 writer = csv.writer(f)
 writer.writerow(col_names)
-for row in data:
-    writer.writerow(row)
+for station, data in city_data.items():
+    data = sorted(data.items(), key=lambda e: e[0])
+    writer.writerow(data[0][1])
+    for i in range(1, len(data)):
+        row_start = data[i - 1][1]
+        row_end = data[i][1]
+        start = datetime.datetime.strptime(row_start[2], time_format)
+        end = datetime.datetime.strptime(row_end[2], time_format)
+        diff = int((end - start).seconds / 3600)
+        for j in range(1, diff):
+            row = ['0000000', station, (start + datetime.timedelta(hours=j)).strftime(time_format)]
+            for k in range(3, len(row_start)):
+                row.append(round(row_start[k] + (row_end[k] - row_start[k]) / diff * j, 2))
+            writer.writerow(row)
+        writer.writerow(data[i][1])
 f.close()

@@ -41,7 +41,7 @@ city_data = {}
 for station in stations:
     city_data[station] = []
 
-reader = csv.reader(open('%s_recent_aq.csv' % city))
+reader = csv.reader(open('%s_recent_aq_fixed.csv' % city))
 for row in reader:
     if city_data.__contains__(row[1]):
         arr = [x and float(x) or 0 for x in row[3:]]
